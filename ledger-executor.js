@@ -1333,7 +1333,7 @@ async function promptForAccountId(foundAccounts = [], implicitAccountId = "", on
         const manualInputSection = showManualInput ? `
             <div style="display:flex; flex-direction:column; gap:12px;">
               ${errorMessage ? alertBox(errorMessage) : ""}
-              <input type="text" id="accountIdInput" placeholder="example.near" value="${currentValue}"
+              <input type="text" id="accountIdInput" placeholder="example.near" autocapitalize="off" autocorrect="off" value="${currentValue}"
                 style="width:100%; padding:12px; border-radius:12px; border:1px solid ${errorMessage ? "#ef4444" : "#a6a6a6"}; background:#1a1a1a; color:#fafafa; font-family:-apple-system,sans-serif; font-size:14px; box-sizing:border-box; outline:none;" />
               <button id="confirmBtn" style="width:100%; padding:9.5px 24px; border-radius:8px; border:none; background:#f5f5f5; color:#0a0a0a; cursor:pointer; font-family:-apple-system,sans-serif; font-size:14px; font-weight:500;">Confirm</button>
             </div>` : `
