@@ -907,8 +907,8 @@ async function openNearApplication() {
 
 async function rpcRequest(network, method, params) {
     const rpcUrls = {
-        mainnet: "https://rpc.mainnet.fastnear.com",
-        testnet: "https://rpc.testnet.fastnear.com",
+        mainnet: "https://rpc.near.org",
+        testnet: "https://rpc.testnet.near.org",
     };
     const rpcUrl = rpcUrls[network] || rpcUrls.mainnet;
     const response = await fetch(rpcUrl, {
