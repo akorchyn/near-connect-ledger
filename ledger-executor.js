@@ -63,7 +63,7 @@ function nativeBLE(action, params = {}) {
             const msg = { type: LEDGER_BLE_REQUEST, id, action, params };
             let target = window.parent;
             while (target && target !== window) {
-                try { target.postMessage(msg, "*"); } catch {}
+                try { target.postMessage(msg, "*"); } catch { }
                 if (target === target.parent) break;
                 target = target.parent;
             }
@@ -123,7 +123,7 @@ async function usbOpen(device) {
     }
 
     // Reset to release any kernel/OS driver claims
-    try { await device.reset(); } catch {}
+    try { await device.reset(); } catch { }
 
     // Log available interfaces for debugging
     const cfg = device.configuration;
@@ -478,7 +478,7 @@ async function transportConnect(mode) {
                 try {
                     const devices = await navigator.usb.getDevices();
                     device = devices.find(d => d.vendorId === LEDGER_VENDOR_ID) || null;
-                } catch {}
+                } catch { }
                 if (!device) {
                     device = await navigator.usb.requestDevice({
                         filters: [{ vendorId: LEDGER_VENDOR_ID }],
@@ -547,7 +547,7 @@ async function transportConnect(mode) {
                 service = services[0] || null;
             } catch {
                 for (const uuid of serviceUuids) {
-                    try { service = await device.gatt.getPrimaryService(uuid); break; } catch {}
+                    try { service = await device.gatt.getPrimaryService(uuid); break; } catch { }
                 }
             }
             if (!service) throw new Error("Ledger BLE service not found on device.");
@@ -601,7 +601,7 @@ async function transportConnect(mode) {
             if (needsReconnect && (afterMTU - beforeMTU) > 1000) {
                 console.log("[BLE] new pairing detected, reconnecting after delay...");
                 _bleNotifyChar.removeEventListener("characteristicvaluechanged", _bleOnNotification);
-                try { await _bleNotifyChar.stopNotifications(); } catch {}
+                try { await _bleNotifyChar.stopNotifications(); } catch { }
                 device.gatt.disconnect();
                 await new Promise(r => setTimeout(r, 4000));
                 return await bleOpen(device, false);
@@ -624,14 +624,14 @@ async function transportConnect(mode) {
     } else if (mode === TRANSPORT_NATIVE_BLE) {
         // Check if native side already has a connected device (e.g. from a previous iframe session)
         let alreadyConnected = false;
-        try { alreadyConnected = await nativeBLE("isConnected"); } catch {}
+        try { alreadyConnected = await nativeBLE("isConnected"); } catch { }
         if (alreadyConnected) {
             _activeTransport = { name: "connected" };
             _activeTransportMode = TRANSPORT_NATIVE_BLE;
             return;
         }
         // Disconnect any stale native connection before scanning
-        try { await nativeBLE("disconnect"); } catch {}
+        try { await nativeBLE("disconnect"); } catch { }
         await nativeBLE("scan");
         await new Promise(r => setTimeout(r, 3000));
         await nativeBLE("stopScan");
@@ -660,7 +660,7 @@ async function transportDisconnect() {
         } else if (_activeTransportMode === TRANSPORT_WEB_BLE && _bleDevice) {
             if (_bleNotifyChar) {
                 _bleNotifyChar.removeEventListener("characteristicvaluechanged", _bleOnNotification);
-                try { await _bleNotifyChar.stopNotifications(); } catch {}
+                try { await _bleNotifyChar.stopNotifications(); } catch { }
             }
             if (_bleDevice.gatt?.connected) _bleDevice.gatt.disconnect();
             _bleDevice = null;
@@ -671,7 +671,7 @@ async function transportDisconnect() {
         } else if (_activeTransportMode === TRANSPORT_NATIVE_BLE) {
             await nativeBLE("disconnect");
         }
-    } catch {}
+    } catch { }
     _activeTransport = null;
     _activeTransportMode = null;
 }
@@ -704,7 +704,7 @@ function bip32PathToBytes(path) {
         let val = part.endsWith("'")
             ? (Math.abs(parseInt(part.slice(0, -1))) | 0x80000000) >>> 0
             : Math.abs(parseInt(part));
-        result[i * 4]     = (val >> 24) & 0xff;
+        result[i * 4] = (val >> 24) & 0xff;
         result[i * 4 + 1] = (val >> 16) & 0xff;
         result[i * 4 + 2] = (val >> 8) & 0xff;
         result[i * 4 + 3] = val & 0xff;
@@ -917,7 +917,11 @@ async function rpcRequest(network, method, params) {
         body: JSON.stringify({ jsonrpc: "2.0", id: "dontcare", method, params }),
     });
     const json = await response.json();
-    if (json.error) throw new Error(json.error.message || "RPC request failed");
+    if (json.error) {
+        const err = new Error(json.error.message || "RPC request failed");
+        err.cause = json.error.cause;
+        throw err;
+    }
     if (json.result?.error) {
         const errMsg = typeof json.result.error === "string" ? json.result.error : JSON.stringify(json.result.error);
         throw new Error(errMsg);
@@ -1393,7 +1397,7 @@ async function promptForDerivationPath(currentPath = DEFAULT_DERIVATION_PATH) {
 // Account ID Input UI
 // ============================================================================
 
-async function promptForAccountId(foundAccounts = [], implicitAccountId = "", onVerify = null, hideOnSuccess = true) {
+async function promptForAccountId(foundAccounts = [], implicitAccountId = "", onVerify = null, onCreateAccount = null, hideOnSuccess = true) {
     await window.selector.ui.showIframe();
     const root = document.getElementById("root");
     root.style.display = "flex";
@@ -1488,8 +1492,28 @@ async function promptForAccountId(foundAccounts = [], implicitAccountId = "", on
                         }
                         resolve(accountId);
                     } catch (error) {
-                        renderUI(error.message, "", false);
-                        setupListeners();
+                        if (error?.code === "ACCOUNT_CREATION_REQUIRED" && onCreateAccount) {
+                            try {
+                                const created = await promptForCreateAccount(accountId, error.message, onCreateAccount);
+                                if (created) {
+                                    if (hideOnSuccess) {
+                                        root.innerHTML = "";
+                                        root.style.display = "none";
+                                        window.selector.ui.hideIframe();
+                                    }
+                                    resolve(accountId);
+                                    return;
+                                }
+                                renderUI(null, "", false);
+                                setupListeners();
+                            } catch (createError) {
+                                renderUI(createError.message, "", false);
+                                setupListeners();
+                            }
+                        } else {
+                            renderUI(error.message, "", false);
+                            setupListeners();
+                        }
                     }
                 } else {
                     if (hideOnSuccess) {
@@ -1544,8 +1568,28 @@ async function promptForAccountId(foundAccounts = [], implicitAccountId = "", on
                             }
                             resolve(accountId);
                         } catch (error) {
-                            renderUI(error.message, accountId, true);
-                            setupListeners();
+                            if (error?.code === "ACCOUNT_CREATION_REQUIRED" && onCreateAccount) {
+                                try {
+                                    const created = await promptForCreateAccount(accountId, error.message, onCreateAccount);
+                                    if (created) {
+                                        if (hideOnSuccess) {
+                                            root.innerHTML = "";
+                                            root.style.display = "none";
+                                            window.selector.ui.hideIframe();
+                                        }
+                                        resolve(accountId);
+                                        return;
+                                    }
+                                    renderUI(null, accountId, true);
+                                    setupListeners();
+                                } catch (createError) {
+                                    renderUI(createError.message, accountId, true);
+                                    setupListeners();
+                                }
+                            } else {
+                                renderUI(error.message, accountId, true);
+                                setupListeners();
+                            }
                         }
                     } else {
                         if (hideOnSuccess) {
@@ -1580,8 +1624,11 @@ async function verifyAccessKey(network, accountId, publicKey) {
         });
     } catch (error) {
         const msg = error.message || "";
-        if (msg.includes("does not exist") || msg.includes("UnknownAccount")) {
-            throw new Error(`Account ${accountId} does not exist on the NEAR blockchain.`);
+        const causeName = error.cause?.name || "";
+        if (causeName === "UNKNOWN_ACCOUNT" || error.data?.includes("does not exist") || msg.includes("does not exist") || error.data?.includes("UnknownAccount") || msg.includes("UnknownAccount") || error.data?.includes("AccountDoesNotExist") || msg.includes("AccountDoesNotExist")) {
+            const err = new Error(`Account ${accountId} does not exist yet.`);
+            err.code = "ACCOUNT_CREATION_REQUIRED";
+            throw err;
         }
         throw error;
     }
@@ -1608,6 +1655,88 @@ async function verifyAccessKey(network, accountId, publicKey) {
 }
 
 // ============================================================================
+// Account Creation
+// ============================================================================
+
+async function createUserAccountViaApi(accountId, publicKey) {
+    const response = await fetch("https://api.trezu.app/api/user/create", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ accountId, publicKey }),
+    });
+
+    let body = null;
+    try { body = await response.json(); } catch { }
+
+    if (!response.ok) {
+        const message =
+            body?.error ||
+            body?.message ||
+            (typeof body === "string" ? body : null) ||
+            "Failed to create account. Please try again.";
+        throw new Error(message);
+    }
+
+    return body;
+}
+
+async function promptForCreateAccount(accountId, reasonMessage, onCreateAccount) {
+    const root = document.getElementById("root");
+    root.style.display = "flex";
+
+    function renderUI(errorMessage = null) {
+        const alertMessage = errorMessage || reasonMessage;
+        root.innerHTML = `
+        <div style="display:flex; flex-direction:column; width:100%; height:100%; background:#000; border-radius:24px; overflow:hidden; text-align:left;">
+          <div style="flex:1; padding:24px; display:flex; flex-direction:column; gap:32px; overflow:auto;">
+            <div style="display:flex; flex-direction:column; gap:12px; padding-top:20px;">
+              <span style="font-family:-apple-system,sans-serif; font-weight:600; font-size:24px; color:#fafafa;">Account Doesn't Exist</span>
+              <p style="font-family:-apple-system,sans-serif; font-size:14px; color:#a3a3a3; line-height:1.5; margin:0; overflow-wrap:anywhere; word-break:break-word;">
+                The account <strong style="color:#fafafa;">${accountId}</strong> does not exist on NEAR blockchain. Do you want to create it now?
+              </p>
+            </div>
+            <div style="display:flex; flex-direction:column; gap:16px;">
+              ${alertMessage ? alertBox(alertMessage) : ""}
+              <div style="display:flex; flex-direction:column; gap:8px; padding-top:${alertMessage ? "0" : "16px"};">
+                <button id="createAccountCancelBtn" style="width:100%; padding:9.5px 24px; border-radius:8px; border:1px solid #404040; background:rgba(255,255,255,0.05); color:#fafafa; cursor:pointer; font-family:-apple-system,sans-serif; font-size:14px; font-weight:500;">Cancel</button>
+                <button id="createAccountConfirmBtn" style="width:100%; padding:9.5px 24px; border-radius:8px; border:none; background:#f5f5f5; color:#0a0a0a; cursor:pointer; font-family:-apple-system,sans-serif; font-size:14px; font-weight:500;">Create Account</button>
+              </div>
+            </div>
+          </div>
+        </div>`;
+    }
+
+    renderUI();
+
+    return new Promise((resolve, reject) => {
+        function setupListeners() {
+            const cancelBtn = document.getElementById("createAccountCancelBtn");
+            const createBtn = document.getElementById("createAccountConfirmBtn");
+
+            cancelBtn.addEventListener("click", () => { resolve(false); });
+
+            createBtn.addEventListener("click", async () => {
+                createBtn.disabled = true;
+                createBtn.textContent = "Creating...";
+                try {
+                    await onCreateAccount(accountId);
+                    resolve(true);
+                } catch (error) {
+                    renderUI(error.message || "Failed to create account.");
+                    setupListeners();
+                }
+            });
+        }
+
+        try {
+            setupListeners();
+        } catch (error) {
+            reject(error);
+        }
+    });
+}
+
+// ============================================================================
 // Borsh Serialization Helpers
 // ============================================================================
 
@@ -1615,7 +1744,7 @@ async function verifyAccessKey(network, accountId, publicKey) {
 // @near-js/transactions which has assertion code that fails in WKWebView.
 
 function writeU32LE(buf, offset, val) {
-    buf[offset]     = val & 0xff;
+    buf[offset] = val & 0xff;
     buf[offset + 1] = (val >> 8) & 0xff;
     buf[offset + 2] = (val >> 16) & 0xff;
     buf[offset + 3] = (val >> 24) & 0xff;
@@ -2050,7 +2179,11 @@ class LedgerWallet {
             await verifyAccessKey(network, accountId, publicKey);
         };
 
-        const accountId = await promptForAccountId(foundAccounts, implicitAccountId, verifyAccount, false);
+        const createUserAccount = async (accountId) => {
+            await createUserAccountViaApi(accountId, publicKey);
+        };
+
+        const accountId = await promptForAccountId(foundAccounts, implicitAccountId, verifyAccount, createUserAccount, false);
 
         const accounts = [{ accountId, publicKey }];
         await window.selector.storage.set(STORAGE_KEY_ACCOUNTS, JSON.stringify(accounts));
